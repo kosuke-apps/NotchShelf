@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let mode = NotchInput.Mode(rawValue: ProcessInfo.processInfo.environment["NOTCHSHELF_INPUT"] ?? "")
-            ?? .monitor
+            ?? .tap
         input = NotchInput(mode: mode)
         input.onNotchClick = { [weak self] in self?.toggleStrip() }
         input.onMechanismFired = { name in
@@ -75,6 +75,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // problems that only show up away from the first desktop.
         if let delay = ProcessInfo.processInfo.environment["NOTCHSHELF_SHOWAFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.toggleStrip() }
+        }
+
+        // Posts one real click (through the HID tap, as a mouse would) at the notch after a delay,
+        // long enough to switch desktop first, and puts the pointer back.
+        if let delay = ProcessInfo.processInfo.environment["NOTCHSHELF_CLICKNOTCHAFTER"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let notch = self?.geometry?.notch,
+                      let source = CGEventSource(stateID: .hidSystemState) else { return }
+                let point = Coord.toCG(NSPoint(x: notch.midX, y: notch.midY))
+                let origin = CGEvent(source: nil)?.location
+                Diagnostics.shared.log("click test: posting a click at \(Int(point.x)),\(Int(point.y))"
+                    + " front=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
+                for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+                    CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+                            mouseButton: .left)?.post(tap: .cghidEventTap)
+                    usleep(40_000)
+                }
+                if let origin { CGWarpMouseCursorPosition(origin); CGAssociateMouseAndMouseCursorPosition(1) }
+            }
         }
 
         if ProcessInfo.processInfo.environment["NOTCHSHELF_AUTOSHOW"] != nil {

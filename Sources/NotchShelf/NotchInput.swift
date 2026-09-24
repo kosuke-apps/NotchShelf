@@ -4,21 +4,32 @@ import AppKit
 /// only affordance. Nothing is drawn there (there are no pixels behind the camera housing),
 /// so this is purely about receiving the click.
 ///
-/// Detection is by global mouse monitor, which observes clicks without consuming them. The
-/// alternative — an invisible panel sitting on the notch — does receive the click, but it also
-/// swallows every other event in that region, including the command-drag people use to
-/// rearrange the menu bar. Trying to make the panel step aside while Command is held did not
-/// work: the global modifier monitor never fired. A window over the notch is simply in the way,
-/// so there is no window over the notch.
+/// Detection is by a listen-only event tap, which sees every click as it enters the session —
+/// before the window server decides who gets it — and neither consumes nor alters it.
+///
+/// The global mouse monitor used before only sees clicks that are delivered to some other
+/// application. What was observed with it: physical notch clicks were detected on the first
+/// desktop and, by the user's report, not on the others, although the windows over the notch
+/// were identical on every desktop; and a synthetic click at the notch went unseen on both the
+/// first and second desktop. Why the monitor missed them is not established — the likeliest
+/// explanation, a menu bar click that is never delivered to any app, does not account for the
+/// synthetic click being missed with the Claude app in front. The tap sits upstream of all of
+/// that: the same synthetic click was seen on the first, second and third desktop.
+///
+/// An invisible panel sitting on the notch would receive the click too, but it also swallows
+/// every other event in that region, including the command-drag people use to rearrange the
+/// menu bar, so there is no window over the notch.
 final class NotchInput {
     enum Mode: String {
-        case catcher, monitor, both
+        case tap, catcher, monitor, both
     }
 
     private let mode: Mode
     private var panel: NSPanel?
     private var monitor: Any?
     private var modifierMonitor: Any?
+    private var tap: CFMachPort?
+    private var tapSource: CFRunLoopSource?
     private var geometry: MenuBarGeometry?
 
     var onNotchClick: (() -> Void)?
@@ -35,6 +46,14 @@ final class NotchInput {
     func start(geometry: MenuBarGeometry) {
         self.geometry = geometry
         guard geometry.notch != nil else { return }
+        if mode == .tap {
+            if !installTap() {
+                // Without permission to tap the event stream, fall back to the monitor, which
+                // works at least while an app that receives menu bar clicks is in front.
+                Diagnostics.shared.log("Could not create the event tap; watching with a global monitor")
+                installMonitor()
+            }
+        }
         if mode == .catcher { installCatcher(); installModifierWatch() }
         if mode == .monitor || mode == .both { installMonitor() }
     }
@@ -112,11 +131,50 @@ final class NotchInput {
         }
     }
 
+    private func installTap() -> Bool {
+        let mask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, info in
+            guard let info else { return Unmanaged.passUnretained(event) }
+            let input = Unmanaged<NotchInput>.fromOpaque(info).takeUnretainedValue()
+            switch type {
+            case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                // macOS switches a tap off if it ever answers too slowly; switch it back on.
+                if let tap = input.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            case .leftMouseDown:
+                input.handleTappedClick(at: event.location, flags: event.flags)
+            default:
+                break
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                          options: .listenOnly, eventsOfInterest: mask,
+                                          callback: callback,
+                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            return false
+        }
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        self.tap = tap
+        self.tapSource = source
+        return true
+    }
+
+    /// `point` is in the tap's coordinates: global, top-left origin.
+    private func handleTappedClick(at point: CGPoint, flags: CGEventFlags) {
+        guard let notch = geometry?.notch, Coord.toCG(notch).contains(point) else { return }
+        guard !flags.contains(.maskCommand) else { return }   // a command-drag, not a click
+        onMechanismFired?("tap")
+        onNotchClick?()
+    }
+
     private func installMonitor() {
         // Mouse-only global monitors do not need the accessibility permission.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
             guard let self, let notch = self.geometry?.notch else { return }
-            guard notch.contains(NSEvent.mouseLocation) else { return }
+            let location = NSEvent.mouseLocation
+            guard notch.contains(location) else { return }
             guard !event.modifierFlags.contains(.command) else { return }
             self.onMechanismFired?("monitor")
             self.onNotchClick?()
@@ -124,6 +182,8 @@ final class NotchInput {
     }
 
     deinit {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
     }
