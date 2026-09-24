@@ -1,0 +1,6 @@
+# SwiftPM build products and caches
+.build/
+# App bundle and icon set assembled by Scripts/build-app.sh
+build/
+# macOS
+.DS_Store
