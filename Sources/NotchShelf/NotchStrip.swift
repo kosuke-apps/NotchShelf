@@ -112,7 +112,8 @@ final class NotchStrip: NSPanel {
             guard let self else { return }
             Diagnostics.shared.log("  shelf state: visible=\(self.isVisible)"
                 + " onActiveSpace=\(self.isOnActiveSpace)"
-                + " occluded=\(!self.occlusionState.contains(.visible))")
+                + " occluded=\(!self.occlusionState.contains(.visible))"
+                + (self.isVisible && !self.isOnActiveSpace ? "  <- ON ANOTHER DESKTOP" : ""))
         }
     }
 

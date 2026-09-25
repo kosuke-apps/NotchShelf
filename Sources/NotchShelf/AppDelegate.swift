@@ -5,7 +5,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let capture = ItemCapture()
     private let axItems = AXStatusItems()
     private let mover = MoveCoordinator()
-    private let strip = NotchStrip()
+    /// Replaced by a fresh panel every time the shelf opens; see `makeStrip`.
+    private var strip = NotchStrip()
     private var input: NotchInput!
     private var settingsController: SettingsWindow?
     private var timer: Timer?
@@ -22,12 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is the notch itself; settings open from the shelf's right-click, or by opening the app
         // again.
 
-        strip.onSelect = { [weak self] item in self?.activate(item) }
-        strip.onOverflow = { [weak self] in self?.openSettings() }
-        strip.onSecondaryClick = { [weak self] in self?.openSettings() }
-        strip.onReorder = { names in Settings.shared.order = names }
-        strip.onBringOut = { [weak self] item in self?.bringOut(item) }
-        strip.onContextMenu = { [weak self] item, _ in self?.showItemMenu(for: item) }
+        strip = makeStrip()
         Settings.shared.onChange = { [weak self] in self?.reshowStripIfOpen() }
 
         mover.log = { Diagnostics.shared.log($0) }
@@ -65,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Coming back from sleep, the screen can be described differently for a moment and the
         // captured icons are stale; start again from what is there now.
         NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(screenParametersChanged),
+            self, selector: #selector(didWake),
             name: NSWorkspace.didWakeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(activeSpaceChanged),
@@ -77,22 +73,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.toggleStrip() }
         }
 
-        // Posts one real click (through the HID tap, as a mouse would) at the notch after a delay,
-        // long enough to switch desktop first, and puts the pointer back.
-        if let delay = ProcessInfo.processInfo.environment["NOTCHSHELF_CLICKNOTCHAFTER"].flatMap(Double.init) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let notch = self?.geometry?.notch,
-                      let source = CGEventSource(stateID: .hidSystemState) else { return }
-                let point = Coord.toCG(NSPoint(x: notch.midX, y: notch.midY))
-                let origin = CGEvent(source: nil)?.location
-                Diagnostics.shared.log("click test: posting a click at \(Int(point.x)),\(Int(point.y))"
-                    + " front=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
-                for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-                    CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
-                            mouseButton: .left)?.post(tap: .cghidEventTap)
-                    usleep(40_000)
+        // Posts real clicks (through the HID tap, as a mouse would) at the notch at the given
+        // seconds after launch — "3,4,9" — so a sequence spanning a desktop switch can be
+        // reproduced. The pointer is put back after each.
+        if let times = ProcessInfo.processInfo.environment["NOTCHSHELF_CLICKNOTCHAT"] {
+            for delay in times.split(separator: ",").compactMap({ Double($0) }) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let notch = self?.geometry?.notch,
+                          let source = CGEventSource(stateID: .hidSystemState) else { return }
+                    let point = Coord.toCG(NSPoint(x: notch.midX, y: notch.midY))
+                    let origin = CGEvent(source: nil)?.location
+                    Diagnostics.shared.log("click test: t=\(delay)s front=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
+                    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+                        CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+                                mouseButton: .left)?.post(tap: .cghidEventTap)
+                        usleep(40_000)
+                    }
+                    if let origin { CGWarpMouseCursorPosition(origin); CGAssociateMouseAndMouseCursorPosition(1) }
                 }
-                if let origin { CGWarpMouseCursorPosition(origin); CGAssociateMouseAndMouseCursorPosition(1) }
             }
         }
 
@@ -127,6 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activeSpaceChanged() {
         Diagnostics.shared.log("Desktop changed (shelf \(strip.isShown ? "open" : "closed"))")
         strip.hide(reason: "desktop changed")
+    }
+
+    @objc private func didWake() {
+        Diagnostics.shared.log("Woke from sleep")
+        screenParametersChanged()
     }
 
     @objc private func screenParametersChanged() {
@@ -191,11 +194,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         strip.show(entries: entries, geometry: geometry)
     }
 
+    /// A new panel for each opening.
+    ///
+    /// Once, the shelf opened — the window server said it was visible — but on a desktop other
+    /// than the one in front, and stayed that way for every opening after, so it could not be
+    /// seen at all. That happened a few minutes after the Mac woke from sleep, and right after a
+    /// desktop switch; the same switch without a sleep never reproduced it, so the cause is not
+    /// established. What was reliable in every test is that a newly created panel appears on
+    /// the desktop in front. So the shelf never reuses one.
+    private func makeStrip() -> NotchStrip {
+        let panel = NotchStrip()
+        panel.onSelect = { [weak self] item in self?.activate(item) }
+        panel.onOverflow = { [weak self] in self?.openSettings() }
+        panel.onSecondaryClick = { [weak self] in self?.openSettings() }
+        panel.onReorder = { names in Settings.shared.order = names }
+        panel.onBringOut = { [weak self] item in self?.bringOut(item) }
+        panel.onContextMenu = { [weak self] item, _ in self?.showItemMenu(for: item) }
+        return panel
+    }
+
     private func toggleStrip() {
         guard let geometry else { return }
         if strip.isShown {
             strip.hide()
         } else {
+            strip.hide(reason: "replaced")
+            strip = makeStrip()
             strip.show(entries: entries, geometry: geometry)
             capture.ensureImages(for: entries.map(\.item), force: true) { [weak self] in
                 self?.rebuildEntries()
