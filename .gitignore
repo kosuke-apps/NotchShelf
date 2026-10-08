@@ -4,3 +4,5 @@
 build/
 # macOS
 .DS_Store
+# Workspace label: holds private notes, never published
+.label.toml
