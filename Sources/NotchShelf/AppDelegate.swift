@@ -18,6 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isSettingsVisible: Bool { settingsController?.window?.isVisible == true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // First, before anything reads or registers settings.
+        let carried = LegacySettingsMigration.run(
+            from: UserDefaults(suiteName: LegacySettingsMigration.legacyDomain), to: .standard)
+        if !carried.isEmpty {
+            Diagnostics.shared.log("Carried settings over from \(LegacySettingsMigration.legacyDomain): "
+                                   + carried.joined(separator: ", "))
+        }
+
         // NotchShelf has no menu bar icon of its own. It would take a place in the very bar whose
         // overflow the app exists to deal with, pushing one more item behind the notch. The way in
         // is the notch itself; settings open from the shelf's right-click, or by opening the app

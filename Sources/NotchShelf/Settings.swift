@@ -101,3 +101,30 @@ final class Settings {
         }.map(\.element)
     }
 }
+
+/// Carries settings over from the bundle identifier the app had before its first release,
+/// `com.kosuke.NotchShelf`. Preferences are stored per identifier, so after the change to
+/// `dev.kosuke.NotchShelf` they would otherwise be left behind.
+enum LegacySettingsMigration {
+    static let legacyDomain = "com.kosuke.NotchShelf"
+    static let doneKey = "migratedFromLegacyIdentifier"
+    /// The keys the app still reads. The rest of the old domain belongs to removed features.
+    static let keys = ["shelfRows", "shelfOrder", "immovableItems", "lastDrawingCutoff"]
+
+    /// Copies those keys once, never over a value the new domain already holds, and leaves the
+    /// old domain untouched. Run it before anything registers defaults on `to`, since a
+    /// registered default would read as an existing value. Returns the keys it copied.
+    @discardableResult
+    static func run(from old: UserDefaults?, to new: UserDefaults) -> [String] {
+        guard !new.bool(forKey: doneKey) else { return [] }
+        defer { new.set(true, forKey: doneKey) }
+        guard let old else { return [] }
+        var copied: [String] = []
+        for key in keys where new.object(forKey: key) == nil {
+            guard let value = old.object(forKey: key) else { continue }
+            new.set(value, forKey: key)
+            copied.append(key)
+        }
+        return copied
+    }
+}
