@@ -49,20 +49,15 @@ System Settings, or with `tccutil reset ScreenCapture com.kosuke.NotchShelf` and
 
 ## Install
 
-1. Download `NotchShelf.zip` from [Releases](../../releases) and unzip it.
-2. Move `NotchShelf.app` to Applications and open it.
-3. The app is signed but not notarized, so macOS refuses to open it the first time. Open
-   System Settings → Privacy & Security, find the message about NotchShelf, and click Open Anyway.
-4. Grant Screen Recording and Accessibility when asked.
-
-## Build
-
-Requires the Swift toolchain; the tests need Xcode's.
+There is no prebuilt download yet. Build and install it from source; this needs the Swift
+toolchain, and the tests need Xcode's.
 
 ```sh
 Scripts/install.sh   # builds, signs, and installs to /Applications
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
+
+Then open NotchShelf from Applications and grant Screen Recording and Accessibility when asked.
 
 `Scripts/build-app.sh` signs with a self-signed certificate named `Mac Utilities Code Signing`
 when your keychain has one, so that macOS keeps the permissions across rebuilds. Without it the
