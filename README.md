@@ -42,11 +42,6 @@ These are limits of macOS, not settings.
 NotchShelf opens its settings window on first launch, with a button for each permission.
 [PRIVACY.md](PRIVACY.md) lists what is kept and where.
 
-Builds made before the first release used the bundle identifier `com.kosuke.NotchShelf`. Their
-settings are carried over on first launch, but their permission entries are not; remove them in
-System Settings, or with `tccutil reset ScreenCapture com.kosuke.NotchShelf` and
-`tccutil reset Accessibility com.kosuke.NotchShelf`.
-
 ## Install
 
 1. Download `NotchShelf-0.1.0.dmg` from [Releases](https://github.com/kosuke-apps/NotchShelf/releases).
